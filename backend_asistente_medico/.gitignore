@@ -1,0 +1,17 @@
+# Ignorar entorno virtual
+AMvenv/
+
+# Ignorar base de datos SQLite
+db.sqlite3
+
+# Archivos de configuración de entorno
+.env
+
+# Archivos de caché de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Archivos de logs
+*.log

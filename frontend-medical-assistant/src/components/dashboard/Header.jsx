@@ -1,9 +1,15 @@
+'use client';
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Menu, Home, ChevronDown, Bell } from "lucide-react"
+import { AuthContext } from '@/contexts/AuthContext';
+import { useContext } from 'react';
 
 export default function Header({ isMobile, setSidebarOpen, activeSection }) {
+
+  const { user } = useContext(AuthContext);
+  
   return (
     <header className="bg-white border-b border-gray-200 flex items-center justify-between px-4 py-4 md:px-6">
       <div className="flex items-center">
@@ -27,7 +33,7 @@ export default function Header({ isMobile, setSidebarOpen, activeSection }) {
                       ? "Billing System"
                       : activeSection === "food-delivery"
                         ? "Food Delivery"
-                        : "Premium Version"}
+                        : "Asistente Medico"}
         </h1>
       </div>
       <div className="flex items-center space-x-4">
@@ -48,6 +54,7 @@ export default function Header({ isMobile, setSidebarOpen, activeSection }) {
             <DropdownMenuItem>Hotel Sheraton</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu> */}
+        <h1>Hola {user.username}</h1>
         {/* Notifications */}
         <Button variant="ghost" size="icon" className="relative">
           <Bell className="h-5 w-5" />
@@ -58,7 +65,7 @@ export default function Header({ isMobile, setSidebarOpen, activeSection }) {
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" className="relative h-8 w-8 rounded-full">
               <Avatar className="h-8 w-8">
-                <AvatarImage src="/placeholder.svg?height=32&width=32" alt="User" />
+                <AvatarImage src="/user.svg?height=32&width=32" alt="User" />
                 <AvatarFallback>U</AvatarFallback>
               </Avatar>
             </Button>

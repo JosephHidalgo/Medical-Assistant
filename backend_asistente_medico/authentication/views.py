@@ -11,16 +11,20 @@ import json
 def login_view(request):
     try:
         data = json.loads(request.body)
-        username = data.get('username')
+        email = data.get('email')
         password = data.get('password')
         
-        if not username or not password:
+        if not email or not password:
             return JsonResponse({
                 'success': False, 
                 'message': 'Username and password required'
             }, status=400)
         
-        user = authenticate(request, username=username, password=password)
+        try:
+            user_obj = User.objects.get(email=email)
+            user = authenticate(request, username=user_obj.username, password=password)
+        except User.DoesNotExist:
+            user = None
         
         if user is not None:
             login(request, user)

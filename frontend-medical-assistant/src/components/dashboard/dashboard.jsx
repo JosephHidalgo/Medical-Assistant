@@ -37,13 +37,14 @@ export default function DashboardSimple() {
 
   const sidebarItems = [
     { id: "dashboard", label: "Dashboard", icon: BarChart },
+    { id: "programar_cita", label: "Programa una cita", icon: Bell },
     { id: "citas", label: "Citas", icon: CalendarIcon },
     { id: "anuncios", label: "Anuncios", icon: Home },
     { id: "mensajes", label: "Mensajes", icon: MessageSquare },
     // { id: "customer-review", label: "Customer Review", icon: Star },
     // { id: "billing", label: "Billing System", icon: CreditCard },
     // { id: "food-delivery", label: "Food Delivery", icon: Utensils },
-    { id: "premium", label: "Try Premium Version", icon: Award },
+    { id: "historial", label: "Tu Historial Medico", icon: Award },
   ]
 
   const statsCards = [

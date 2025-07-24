@@ -75,7 +75,7 @@ export default function TriajeChat({ onBack }) {
 //     }
 //   }
 
-  const handleSendMessage = () => {
+  const handleSendMessage = async () => {
     if (!inputMessage.trim()) return
 
     // Add user message
@@ -91,12 +91,41 @@ export default function TriajeChat({ onBack }) {
     setInputMessage("")
     setIsTyping(true)
 
-    // Simulate agent typing and response
-    setTimeout(() => {
-      const agentResponse = getAgentResponse(inputMessage)
-      setMessages((prev) => [...prev, agentResponse])
-      setIsTyping(false)
-    }, 1500)
+    try {
+      const response = await fetch("http://localhost:8000/asistente/atender/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nombre: "Carlos",
+          edad: "50",
+          telefono: "950505050",
+          sintomas: userMessage.content,
+        }),
+      })
+      const data = await response.json()
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          content: data.resultado?.respuesta_completa || "No se recibió respuesta del backend.",
+          sender: "agent",
+          timestamp: new Date(),
+          type: "text",
+        },
+      ])
+    } catch (error) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          content: "Ocurrió un error al contactar al backend.",
+          sender: "agent",
+          timestamp: new Date(),
+          type: "text",
+        },
+      ])
+    }
+    setIsTyping(false)
   }
 
   const handleKeyPress = (e) => {

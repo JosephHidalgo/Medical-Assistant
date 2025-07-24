@@ -2,6 +2,7 @@
 AMvenv/
 
 # Ignorar base de datos SQLite
+sistema_medico.db
 db.sqlite3
 
 # Archivos de configuración de entorno

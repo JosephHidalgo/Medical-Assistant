@@ -2,10 +2,11 @@
 
 import MedicalAppointments from "./StatsCards"
 import TriajeChat from "@/components/triaje-chat/triaje-chat"
+import VoiceAssistant from "@/components/voice-assistant/voice-assistant"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Stethoscope, Brain, Clock, Shield, Users, Activity, ArrowRight, Sparkles } from "lucide-react"
+import { Stethoscope, Brain, Clock, Shield, Users, Activity, ArrowRight, Sparkles, Mic } from "lucide-react"
 
 export default function MainContent({ activeSection, statsCards, todayActivities, setActiveSection }) {
   return (
@@ -38,14 +39,25 @@ export default function MainContent({ activeSection, statsCards, todayActivities
                       Revoluciona tu práctica médica con nuestro sistema de triaje inteligente. Evaluación rápida,
                       precisa y confiable para optimizar la atención al paciente.
                     </p>
-                    <Button
-                      size="lg"
-                      className="bg-white text-purple-600 hover:bg-gray-50 font-semibold px-8 py-3 text-lg shadow-lg"
-                      onClick={() => setActiveSection("triaje")}
-                    >
-                      Iniciar Triaje IA
-                      <ArrowRight className="ml-2 h-5 w-5" />
-                    </Button>
+                    <div className="flex gap-4">
+                      <Button
+                        size="lg"
+                        className="bg-white text-purple-600 hover:bg-gray-50 font-semibold px-8 py-3 text-lg shadow-lg"
+                        onClick={() => setActiveSection("triaje")}
+                      >
+                        Iniciar Triaje IA
+                        <ArrowRight className="ml-2 h-5 w-5" />
+                      </Button>
+                      <Button
+                        size="lg"
+                        variant="outline"
+                        className="border-white text-white hover:bg-white/10 hover:text-white font-semibold px-8 py-3 text-lg shadow-lg flex items-center"
+                        onClick={() => setActiveSection("asistente_voz")}
+                      >
+                        <Mic className="mr-2 h-5 w-5" />
+                        Asistente por Voz
+                      </Button>
+                    </div>
                   </div>
                   <div className="flex-shrink-0">
                     <div className="relative">
@@ -130,7 +142,14 @@ export default function MainContent({ activeSection, statsCards, todayActivities
                   <Brain className="h-6 w-6 text-purple-600" />
                   <span className="text-sm font-medium">Nuevo Triaje</span>
                 </Button>
-
+                <Button
+                  variant="outline"
+                  className="h-20 flex-col space-y-2 hover:bg-blue-50 hover:border-blue-300 bg-white"
+                  onClick={() => setActiveSection("asistente_voz")}
+                >
+                  <Mic className="h-6 w-6 text-blue-600" />
+                  <span className="text-sm font-medium">Asistente por Voz</span>
+                </Button>
                 <Button
                   variant="outline"
                   className="h-20 flex-col space-y-2 hover:bg-green-50 hover:border-green-300 bg-white"
@@ -139,7 +158,6 @@ export default function MainContent({ activeSection, statsCards, todayActivities
                   <Users className="h-6 w-6 text-green-600" />
                   <span className="text-sm font-medium">Pacientes</span>
                 </Button>
-
                 <Button
                   variant="outline"
                   className="h-20 flex-col space-y-2 hover:bg-gray-50 hover:border-gray-300 bg-white"
@@ -148,21 +166,14 @@ export default function MainContent({ activeSection, statsCards, todayActivities
                   <Activity className="h-6 w-6 text-gray-600" />
                   <span className="text-sm font-medium">Reportes</span>
                 </Button>
-
-                <Button
-                  variant="outline"
-                  className="h-20 flex-col space-y-2 hover:bg-yellow-50 hover:border-yellow-300 bg-white"
-                  onClick={() => setActiveSection("settings")}
-                >
-                  <Shield className="h-6 w-6 text-yellow-600" />
-                  <span className="text-sm font-medium">Configuración</span>
-                </Button>
               </div>
             </CardContent>
           </Card>
         </>
       ) : activeSection === "triaje" ? (
         <TriajeChat onBack={() => setActiveSection("dashboard")} />
+      ) : activeSection === "asistente_voz" ? (
+        <VoiceAssistant />
       ) : (
         /* Other Sections Placeholder */
         <div className="flex items-center justify-center h-full">

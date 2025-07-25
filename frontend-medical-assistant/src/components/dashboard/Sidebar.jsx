@@ -19,7 +19,7 @@ export default function Sidebar({ isMobile, sidebarOpen, setSidebarOpen, activeS
       )}
       {/* Logo */}
       <div className="p-6 border-b border-gray-200">
-        <h1 className="text-2xl font-semibold text-purple-600">Medicare</h1>
+        <h1 className="text-2xl font-semibold text-purple-600">MEDIAGENT</h1>
       </div>
       {/* Navigation */}
       <div className="flex-1 py-4 overflow-y-auto">

@@ -1,24 +1,36 @@
 "use client"
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useContext } from 'react';
+import { AuthContext } from '@/contexts/AuthContext';
 
 const VoiceAssistant = () => {
+  const { paciente, pacienteId, nombres, edad, numeroTelefono, isAuthenticated } = useContext(AuthContext);
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [transcription, setTranscription] = useState('');
   const [response, setResponse] = useState('');
   const [audioUrl, setAudioUrl] = useState('');
   const [isPlaying, setIsPlaying] = useState(false);
+  const [stage, setStage] = useState('triaje');
+  const [contexto, setContexto] = useState({});
+  const [inputDisabled, setInputDisabled] = useState(false);
+  const [respuestaUsuario, setRespuestaUsuario] = useState('');
 
-  // Datos del paciente
-  const [patientData, setPatientData] = useState({
-    nombre: 'Benito',
-    edad: '20',
-    telefono: '1234567890'
-  });
+  // REFS PARA MANTENER VALORES ACTUALES
+  const stageRef = useRef(stage);
+  const contextoRef = useRef(contexto);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const audioRef = useRef(null);
+
+  // ACTUALIZAR REFS CUANDO CAMBIEN LOS ESTADOS
+  useEffect(() => {
+    stageRef.current = stage;
+  }, [stage]);
+
+  useEffect(() => {
+    contextoRef.current = contexto;
+  }, [contexto]);
 
   // Inicializar MediaRecorder
   const initializeRecording = async () => {
@@ -55,12 +67,9 @@ const VoiceAssistant = () => {
     }
   };
 
-  // Inicializar al montar el componente
   useEffect(() => {
     initializeRecording();
-    
     return () => {
-      // Limpiar recursos
       if (mediaRecorderRef.current?.stream) {
         mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
       }
@@ -69,11 +78,10 @@ const VoiceAssistant = () => {
 
   // Iniciar grabación
   const startRecording = () => {
-    if (!patientData.nombre || !patientData.edad) {
-      alert('Por favor, completa los datos del paciente antes de grabar.');
+    if (!isAuthenticated || !nombres || !edad || inputDisabled) {
+      alert('Debes iniciar sesión y tener tus datos completos para grabar.');
       return;
     }
-
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
       audioChunksRef.current = [];
       mediaRecorderRef.current.start();
@@ -86,10 +94,6 @@ const VoiceAssistant = () => {
 
   // Detener grabación
   const stopRecording = () => {
-    console.log(patientData.nombre);
-    console.log(patientData.edad);
-    console.log(patientData.telefono);
-
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
@@ -97,20 +101,54 @@ const VoiceAssistant = () => {
     }
   };
 
-  // Procesar audio grabado
+  // FUNCIÓN PROCESSAUDIO CORREGIDA CON ID PACIENTE EN CONTEXTO
   const processAudio = async (audioBlob) => {
     try {
-      console.log(patientData.nombre);
-      console.log(patientData.edad);
-      console.log(patientData.telefono);
-
+      // PASO 1: PRIMERO TRANSCRIBIR EL AUDIO
+      const transcribeFormData = new FormData();
+      transcribeFormData.append('audio', audioBlob, 'recording.webm');
+      
+      const transcribeResponse = await fetch('http://localhost:8000/transcribir-audio/', {
+        method: 'POST',
+        body: transcribeFormData,
+      });
+      
+      const transcribeData = await transcribeResponse.json();
+      
+      if (!transcribeData.success) {
+        alert(`Error en transcripción: ${transcribeData.message}`);
+        return;
+      }
+      
+      const nuevaTranscripcion = transcribeData.transcription;
+      
+      // PASO 2: USAR VALORES ACTUALES DE LOS REFS
+      const currentStage = stageRef.current;
+      const currentContexto = contextoRef.current;
+      // AGREGAR ID DEL PACIENTE AL CONTEXTO
+      const contextoConId = {
+        ...currentContexto,
+        paciente_id: paciente?.id || pacienteId,
+      };
+      
       const formData = new FormData();
       formData.append('audio', audioBlob, 'recording.webm');
-      formData.append('nombre', patientData.nombre);
-      formData.append('edad', patientData.edad);
-      formData.append('telefono', patientData.telefono);
-
+      formData.append('nombre', nombres);
+      formData.append('edad', edad);
+      formData.append('telefono', numeroTelefono || '');
+      formData.append('stage', currentStage);
+      formData.append('contexto', JSON.stringify(contextoConId));
       
+      // USAR LA NUEVA TRANSCRIPCIÓN COMO RESPUESTA_USUARIO
+      if (currentStage !== 'triaje') {
+        formData.append('respuesta_usuario', nuevaTranscripcion);
+      }
+
+      console.log("Enviando:", {
+        stage: currentStage,
+        contexto: contextoConId, 
+        respuesta_usuario: currentStage !== 'triaje' ? nuevaTranscripcion : 'N/A'
+      });
 
       const response = await fetch('http://localhost:8000/procesar-consulta-voz/', {
         method: 'POST',
@@ -118,13 +156,26 @@ const VoiceAssistant = () => {
       });
 
       const data = await response.json();
+      console.log("Respuesta del backend:", data);
 
-      if (data.success) {
+      if (data.success) { 
+        // ACTUALIZAR ESTADOS
+        if (data.stage) {
+          setStage(data.stage);
+        }
+        if (data.contexto) {
+          setContexto(data.contexto);
+        }
+        
         setTranscription(data.transcription);
         setResponse(data.resultado.respuesta_completa);
-        
-        // Generar audio de la respuesta
         await generateResponseAudio(data.resultado.respuesta_completa);
+        
+        // Si la conversación terminó, deshabilitar input
+        if (data.stage === 'finalizado') setInputDisabled(true);
+        
+        // Resetear respuestaUsuario después de procesar
+        setRespuestaUsuario('');
       } else {
         alert(`Error: ${data.message}`);
       }
@@ -170,57 +221,25 @@ const VoiceAssistant = () => {
     setIsPlaying(false);
   };
 
+  // Permitir grabar nueva respuesta si el flujo no ha terminado
+  const puedeGrabar = isAuthenticated && !isProcessing && !inputDisabled;
+
   return (
     <div className="max-w-2xl mx-auto p-6 bg-white rounded-lg shadow-lg">
       <h2 className="text-2xl font-bold text-center mb-6 text-blue-600">
         Asistente Médico por Voz
       </h2>
 
-      {/* Formulario de datos del paciente */}
-      <div className="mb-6 space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Nombre del Paciente
-          </label>
-          <input
-            type="text"
-            value={patientData.nombre}
-            onChange={(e) => setPatientData({...patientData, nombre: e.target.value})}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder="Ingresa el nombre completo"
-            disabled={isRecording || isProcessing}
-          />
+      {/* Mostrar advertencia si no autenticado */}
+      {!isAuthenticated && (
+        <div className="mb-6 p-4 bg-yellow-100 text-yellow-800 rounded">
+          Debes iniciar sesión para usar el asistente por voz.
         </div>
-        
-        <div className="flex gap-4">
-          <div className="flex-1">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Edad
-            </label>
-            <input
-              type="number"
-              value={patientData.edad}
-              onChange={(e) => setPatientData({...patientData, edad: e.target.value})}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Edad"
-              disabled={isRecording || isProcessing}
-            />
-          </div>
-          
-          <div className="flex-1">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Teléfono (Opcional)
-            </label>
-            <input
-              type="tel"
-              value={patientData.telefono}
-              onChange={(e) => setPatientData({...patientData, telefono: e.target.value})}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Número de teléfono"
-              disabled={isRecording || isProcessing}
-            />
-          </div>
-        </div>
+      )}
+
+      {/* Estado del flujo */}
+      <div className="mb-4 text-sm text-gray-500 text-center">
+        <span className="font-semibold">Etapa actual:</span> {stage}
       </div>
 
       {/* Controles de grabación */}
@@ -229,10 +248,10 @@ const VoiceAssistant = () => {
           {!isRecording ? (
             <button
               onClick={startRecording}
-              disabled={isProcessing}
+              disabled={!puedeGrabar}
               className="bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-6 rounded-full transition-colors disabled:bg-gray-400"
             >
-              🎤 Iniciar Grabación
+              🎤 {stage === 'triaje' ? 'Iniciar Grabación' : 'Responder por Voz'}
             </button>
           ) : (
             <button
@@ -246,7 +265,7 @@ const VoiceAssistant = () => {
 
         {isRecording && (
           <p className="text-red-600 font-medium">
-            🔴 Grabando... Describe tus síntomas claramente
+            🔴 Grabando... {stage === 'triaje' ? 'Describe tus síntomas claramente' : 'Responde a la pregunta del asistente'}
           </p>
         )}
 

@@ -415,7 +415,6 @@ def procesar_consulta_voz(request):
     Vista integrada que recibe audio, lo transcribe y procesa la consulta médica
     """
     try:
-        print(request)
         # Verificar que se envió un archivo de audio
         if 'audio' not in request.FILES:
             return JsonResponse({
@@ -425,74 +424,191 @@ def procesar_consulta_voz(request):
         
         audio_file = request.FILES['audio']
         
-        print(request.POST)
-        
         # Obtener datos adicionales del formulario
         nombre = request.POST.get('nombre')
         edad = request.POST.get('edad')
         telefono = request.POST.get('telefono')
+        stage = request.POST.get('stage', 'triaje')
+        contexto_str = request.POST.get('contexto', '{}')
+        respuesta_usuario = request.POST.get('respuesta_usuario')
         
+        try:
+            contexto = json.loads(contexto_str)
+        except Exception:
+            contexto = {}
+
         if not nombre or not edad:
             return JsonResponse({
                 'success': False,
                 'message': 'Faltan datos obligatorios: nombre o edad'
             }, status=400)
-        
+
         # Transcribir audio
         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
             for chunk in audio_file.chunks():
                 temp_file.write(chunk)
             temp_file_path = temp_file.name
-        
+
         with open(temp_file_path, 'rb') as audio:
             transcription = client.audio.transcriptions.create(
                 model="whisper-1",
                 file=audio,
                 language="es"
             )
-        
-        # Limpiar archivo temporal
+
         import os
         os.unlink(temp_file_path)
-        
-        # Preparar datos para el agente (usando los síntomas transcritos)
-        datos_paciente = {
-            'nombre': nombre,
-            'edad': int(edad),
-            'sintomas': transcription.text,
-            'telefono': telefono if telefono else None
-        }
-        
-        # Usar tu lógica existente de agentes
-        agente_triaje, agente_bd = crear_agentes()
-        tarea_triaje, tarea_gestion = crear_tareas(agente_triaje, agente_bd, datos_paciente)
-        
-        crew = Crew(
-            agents=[agente_triaje, agente_bd],
-            tasks=[tarea_triaje, tarea_gestion],
-            process=Process.sequential,
-            verbose=False
-        )
-        
-        resultado = crew.kickoff()
-        resultado_serializable = serializar_resultado_crew(resultado)
-        
-        # Verificar serialización
-        try:
-            json.dumps(resultado_serializable)
-        except (TypeError, ValueError) as e:
-            resultado_serializable = {
-                'respuesta_completa': str(resultado.raw) if hasattr(resultado, 'raw') else str(resultado),
-                'timestamp': str(datetime.now()),
-                'error_serializacion': f"Fallback aplicado: {str(e)}"
+
+        # CORRECCIÓN: Construir datos_paciente correctamente según la etapa
+        if stage == 'triaje':
+            # En triaje, los síntomas vienen de la transcripción
+            datos_paciente = {
+                'nombre': nombre,
+                'edad': int(edad),
+                'sintomas': transcription.text,
+                'telefono': telefono if telefono else None
             }
-        
-        return JsonResponse({
-            'success': True,
-            'transcription': transcription.text,
-            'resultado': resultado_serializable
-        })
-        
+        else:
+            # En otras etapas, necesitamos los síntomas originales del contexto
+            # y la respuesta del usuario de la transcripción
+            datos_paciente = {
+                'nombre': nombre,
+                'edad': int(edad),
+                'sintomas': contexto.get('sintomas_originales', transcription.text),
+                'telefono': telefono if telefono else None
+            }
+            # Usar la transcripción como respuesta del usuario
+            respuesta_usuario = transcription.text
+
+        agente_triaje, agente_bd = crear_agentes()
+        tareas = []
+        next_stage = stage
+        next_contexto = contexto.copy() if contexto else {}
+
+        # FLUJO DE ETAPAS CORREGIDO
+        if stage == 'triaje':
+            tareas = crear_tareas(agente_triaje, agente_bd, datos_paciente, 'triaje')
+            crew = Crew(
+                agents=[agente_triaje, agente_bd],
+                tasks=tareas,
+                process=Process.sequential,
+                verbose=False
+            )
+            resultado = crew.kickoff()
+            resultado_serializable = limpiar_dict_para_json(serializar_resultado_crew(resultado))
+            
+            # Extraer contexto del output del agente de triaje
+            output = None
+            if resultado_serializable.get('tareas') and len(resultado_serializable['tareas']) > 0:
+                output = resultado_serializable['tareas'][0].get('output_completo')
+            elif resultado_serializable.get('respuesta_completa'):
+                output = resultado_serializable['respuesta_completa']
+            else:
+                output = ''
+            
+            nuevo_contexto = extraer_contexto_triaje(output)
+            next_contexto = merge_contextos(contexto, nuevo_contexto)
+            # CORRECCIÓN: Guardar los síntomas originales para las siguientes etapas
+            next_contexto['sintomas_originales'] = transcription.text
+            
+            return JsonResponse({
+                'success': True,
+                'stage': 'sugerir_cita',
+                'contexto': next_contexto,
+                'resultado': resultado_serializable,
+                'transcription': transcription.text
+            })
+            
+        elif stage == 'sugerir_cita':
+            confirm_words = ['si', 'sí', 'ok', 'acepto', 'quiero', 'confirmo', 'está bien', 'perfecto']
+            if respuesta_usuario and any(word in respuesta_usuario.lower() for word in confirm_words):
+                tareas = crear_tareas(agente_triaje, agente_bd, datos_paciente, 'sugerir_cita', contexto)
+                next_stage = 'confirmar_cita'
+                
+                crew = Crew(
+                    agents=[agente_triaje, agente_bd],
+                    tasks=tareas,
+                    process=Process.sequential,
+                    verbose=False
+                )
+                resultado = crew.kickoff()
+                resultado_serializable = limpiar_dict_para_json(serializar_resultado_crew(resultado))
+                
+                output = None
+                if resultado_serializable.get('tareas') and len(resultado_serializable['tareas']) > 0:
+                    output = resultado_serializable['tareas'][-1].get('output_completo')
+                elif resultado_serializable.get('respuesta_completa'):
+                    output = resultado_serializable['respuesta_completa']
+                else:
+                    output = ''
+                
+                nuevo_contexto = extraer_contexto_triaje(output)
+                next_contexto = merge_contextos(contexto, nuevo_contexto)
+                
+                return JsonResponse({
+                    'success': True,
+                    'stage': next_stage,
+                    'contexto': next_contexto,
+                    'resultado': resultado_serializable,
+                    'transcription': transcription.text
+                })
+            else:
+                return JsonResponse({
+                    'success': True,
+                    'stage': 'finalizado',
+                    'message': 'No se agenda cita. Si necesitas otra recomendación, vuelve a describir tus síntomas.',
+                    'transcription': transcription.text
+                })
+                
+        elif stage == 'confirmar_cita':
+            required_fields = ['doctor_id', 'doctor_nombre', 'fecha', 'hora']
+            missing = [f for f in required_fields if not contexto.get(f)]
+            if missing:
+                return JsonResponse({
+                    'success': False,
+                    'message': f'Faltan datos en el contexto para confirmar la cita: {", ".join(missing)}. Por favor, vuelve a la etapa anterior.',
+                    'transcription': transcription.text
+                }, status=400)
+                
+            confirm_words = ['si', 'sí', 'ok', 'acepto', 'confirmo', 'está bien', 'perfecto']
+            if respuesta_usuario and any(word in respuesta_usuario.lower() for word in confirm_words):
+                tareas = crear_tareas(agente_triaje, agente_bd, datos_paciente, 'confirmar_cita', contexto)
+                next_stage = 'finalizado'
+            elif respuesta_usuario:
+                # Usuario pide otra fecha
+                tareas = crear_tareas(agente_triaje, agente_bd, datos_paciente, 'negociar_fecha', contexto)
+                next_stage = 'confirmar_cita'
+            else:
+                return JsonResponse({
+                    'success': True,
+                    'stage': 'finalizado',
+                    'message': 'No se agenda cita. Si necesitas otra recomendación, vuelve a describir tus síntomas.',
+                    'transcription': transcription.text
+                })
+                
+            crew = Crew(
+                agents=[agente_triaje, agente_bd],
+                tasks=tareas,
+                process=Process.sequential,
+                verbose=False
+            )
+            resultado = crew.kickoff()
+            resultado_serializable = limpiar_dict_para_json(serializar_resultado_crew(resultado))
+            
+            return JsonResponse({
+                'success': True,
+                'stage': next_stage,
+                'contexto': next_contexto,
+                'resultado': resultado_serializable,
+                'transcription': transcription.text
+            })
+        else:
+            return JsonResponse({
+                'success': False,
+                'message': f'Etapa desconocida: {stage}',
+                'transcription': transcription.text
+            }, status=400)
+            
     except Exception as e:
         return JsonResponse({
             'success': False,

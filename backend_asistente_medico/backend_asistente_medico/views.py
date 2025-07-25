@@ -1,10 +1,20 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+from django.http import HttpResponse
 import json
 from datetime import datetime
 from agentes.agentes import crear_agentes, crear_tareas
 from crewai import Crew, Process
+from openai import OpenAI
+import os
+import tempfile
+
+# Configuración de OpenAI
+client = OpenAI(
+    api_key=os.getenv('OPENAI_API_KEY')
+)
+
 
 def serializar_resultado_crew(resultado):
     """
@@ -245,4 +255,194 @@ def atender_paciente(request):
         return JsonResponse({
             'success': False,
             'message': f'Error en el asistente médico: {str(e)}'
+        }, status=500)
+        
+@csrf_exempt
+@require_http_methods(["POST"])
+def transcribir_audio(request):
+    """
+    Vista para transcribir audio usando Whisper de OpenAI
+    """
+    try:
+        # Verificar que se envió un archivo de audio
+        if 'audio' not in request.FILES:
+            return JsonResponse({
+                'success': False,
+                'message': 'No se encontró archivo de audio'
+            }, status=400)
+        
+        audio_file = request.FILES['audio']
+        
+        # Validar tipo de archivo
+        allowed_types = ['audio/wav', 'audio/mpeg', 'audio/mp4', 'audio/webm']
+        if audio_file.content_type not in allowed_types:
+            return JsonResponse({
+                'success': False,
+                'message': f'Tipo de archivo no soportado: {audio_file.content_type}'
+            }, status=400)
+        
+        # Crear archivo temporal para Whisper
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+            for chunk in audio_file.chunks():
+                temp_file.write(chunk)
+            temp_file_path = temp_file.name
+        
+        # Transcribir con Whisper
+        with open(temp_file_path, 'rb') as audio:
+            transcription = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio,
+                language="es"  # Español
+            )
+        
+        # Limpiar archivo temporal
+        import os
+        os.unlink(temp_file_path)
+        
+        return JsonResponse({
+            'success': True,
+            'transcription': transcription.text
+        })
+        
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'message': f'Error en transcripción: {str(e)}'
+        }, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def procesar_consulta_voz(request):
+    """
+    Vista integrada que recibe audio, lo transcribe y procesa la consulta médica
+    """
+    try:
+        print(request)
+        # Verificar que se envió un archivo de audio
+        if 'audio' not in request.FILES:
+            return JsonResponse({
+                'success': False,
+                'message': 'No se encontró archivo de audio'
+            }, status=400)
+        
+        audio_file = request.FILES['audio']
+        
+        print(request.POST)
+        
+        # Obtener datos adicionales del formulario
+        nombre = request.POST.get('nombre')
+        edad = request.POST.get('edad')
+        telefono = request.POST.get('telefono')
+        
+        if not nombre or not edad:
+            return JsonResponse({
+                'success': False,
+                'message': 'Faltan datos obligatorios: nombre o edad'
+            }, status=400)
+        
+        # Transcribir audio
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+            for chunk in audio_file.chunks():
+                temp_file.write(chunk)
+            temp_file_path = temp_file.name
+        
+        with open(temp_file_path, 'rb') as audio:
+            transcription = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio,
+                language="es"
+            )
+        
+        # Limpiar archivo temporal
+        import os
+        os.unlink(temp_file_path)
+        
+        # Preparar datos para el agente (usando los síntomas transcritos)
+        datos_paciente = {
+            'nombre': nombre,
+            'edad': int(edad),
+            'sintomas': transcription.text,
+            'telefono': telefono if telefono else None
+        }
+        
+        # Usar tu lógica existente de agentes
+        agente_triaje, agente_bd = crear_agentes()
+        tarea_triaje, tarea_gestion = crear_tareas(agente_triaje, agente_bd, datos_paciente)
+        
+        crew = Crew(
+            agents=[agente_triaje, agente_bd],
+            tasks=[tarea_triaje, tarea_gestion],
+            process=Process.sequential,
+            verbose=False
+        )
+        
+        resultado = crew.kickoff()
+        resultado_serializable = serializar_resultado_crew(resultado)
+        
+        # Verificar serialización
+        try:
+            json.dumps(resultado_serializable)
+        except (TypeError, ValueError) as e:
+            resultado_serializable = {
+                'respuesta_completa': str(resultado.raw) if hasattr(resultado, 'raw') else str(resultado),
+                'timestamp': str(datetime.now()),
+                'error_serializacion': f"Fallback aplicado: {str(e)}"
+            }
+        
+        return JsonResponse({
+            'success': True,
+            'transcription': transcription.text,
+            'resultado': resultado_serializable
+        })
+        
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'message': f'Error en procesamiento de voz: {str(e)}'
+        }, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def generar_audio_respuesta(request):
+    """
+    Vista para convertir texto a audio usando TTS de OpenAI
+    """
+    try:
+        data = json.loads(request.body)
+        texto = data.get('texto')
+        
+        if not texto:
+            return JsonResponse({
+                'success': False,
+                'message': 'No se proporcionó texto para convertir'
+            }, status=400)
+        
+        # Generar audio con TTS
+        response = client.audio.speech.create(
+            model="gpt-4o-mini-tts",
+            voice="nova",  # Opciones: alloy, echo, fable, onyx, nova, shimmer
+            input=texto,
+            response_format="mp3"
+        )
+        
+        # Crear respuesta HTTP con el audio
+        audio_response = HttpResponse(
+            response.content,
+            content_type='audio/mpeg'
+        )
+        audio_response['Content-Disposition'] = 'attachment; filename="respuesta.mp3"'
+        
+        return audio_response
+        
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'success': False,
+            'message': 'Error: El cuerpo de la petición no es un JSON válido.'
+        }, status=400)
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'message': f'Error en generación de audio: {str(e)}'
         }, status=500)

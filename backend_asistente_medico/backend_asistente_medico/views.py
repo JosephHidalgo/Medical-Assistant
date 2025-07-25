@@ -4,7 +4,7 @@ from django.views.decorators.http import require_http_methods
 from django.http import HttpResponse
 import json
 from datetime import datetime
-from agentes.agentes import crear_agentes, crear_tareas
+from agentes.agentes import crear_agentes, crear_tareas, extraer_contexto_triaje
 from crewai import Crew, Process
 from openai import OpenAI
 import os
@@ -66,7 +66,13 @@ def serializar_resultado_crew(resultado):
         
         # Agregar información de uso de tokens si está disponible
         if hasattr(resultado, 'token_usage') and resultado.token_usage:
-            resultado_final['token_usage'] = resultado.token_usage
+            try:
+                # Intenta serializar directamente
+                json.dumps(resultado.token_usage)
+                resultado_final['token_usage'] = resultado.token_usage
+            except TypeError:
+                # Si falla, convierte a string
+                resultado_final['token_usage'] = str(resultado.token_usage)
             
         # Si no hay información estructurada, usar la representación completa
         if not resultado_final:
@@ -182,70 +188,161 @@ def extraer_info_medica(output_str):
     
     return info_medica
 
+def merge_contextos(contexto, nuevo_contexto):
+    combinado = contexto.copy()
+    for k, v in nuevo_contexto.items():
+        if v is not None:
+            combinado[k] = v
+    return combinado
+
 # Vista usando la función helper
 @csrf_exempt
 @require_http_methods(["POST"])
 def atender_paciente(request):
     try:
         data = json.loads(request.body)
+        print(data)
+        stage = data.get('stage', 'triaje')
         nombre = data.get('nombre')
         edad = data.get('edad')
         sintomas = data.get('sintomas')
         telefono = data.get('telefono', None)
-        
-        if not nombre or not edad or not sintomas:
+        respuesta_usuario = data.get('respuesta_usuario')
+        contexto = data.get('contexto', {})
+        fecha_deseada = data.get('fecha_deseada')
+        hora_deseada = data.get('hora_deseada')
+
+        if not nombre or not edad:
             return JsonResponse({
                 'success': False,
-                'message': 'Faltan datos obligatorios: nombre, edad o síntomas.'
+                'message': 'Faltan datos obligatorios: nombre o edad.'
             }, status=400)
-        
+
         datos_paciente = {
             'nombre': nombre,
             'edad': edad,
             'sintomas': sintomas,
             'telefono': telefono
         }
-        
+
         agente_triaje, agente_bd = crear_agentes()
-        tarea_triaje, tarea_gestion = crear_tareas(agente_triaje, agente_bd, datos_paciente)
-        
+        tareas = []
+        next_stage = stage
+        next_contexto = contexto.copy() if contexto else {}
+        # Flujo por etapas
+        if stage == 'triaje':
+            tareas = crear_tareas(agente_triaje, agente_bd, datos_paciente, 'triaje')
+            crew = Crew(
+                agents=[agente_triaje, agente_bd],
+                tasks=tareas,
+                process=Process.sequential,
+                verbose=False
+            )
+            resultado = crew.kickoff()
+            resultado_serializable = limpiar_dict_para_json(serializar_resultado_crew(resultado))
+            # Extraer contexto del output del agente de triaje
+            output = None
+            if resultado_serializable.get('tareas') and len(resultado_serializable['tareas']) > 0:
+                output = resultado_serializable['tareas'][0].get('output_completo')
+            elif resultado_serializable.get('respuesta_completa'):
+                output = resultado_serializable['respuesta_completa']
+            else:
+                output = ''
+            nuevo_contexto = extraer_contexto_triaje(output)
+            next_contexto = merge_contextos(contexto, nuevo_contexto)
+            return JsonResponse({
+                'success': True,
+                'stage': 'sugerir_cita',
+                'contexto': next_contexto,
+                'resultado': resultado_serializable
+            })
+        elif stage == 'sugerir_cita':
+            # Se espera que contexto tenga especialidad, doctor_id, doctor_nombre, urgencia
+            if respuesta_usuario and respuesta_usuario.lower() in ['si', 'sí', 'ok', 'acepto', 'quiero', 'confirmo']:
+                tareas = crear_tareas(agente_triaje, agente_bd, datos_paciente, 'sugerir_cita', contexto)
+                next_stage = 'confirmar_cita'  # Espera confirmación de la fecha sugerida
+
+                crew = Crew(
+                    agents=[agente_triaje, agente_bd],
+                    tasks=tareas,
+                    process=Process.sequential,
+                    verbose=False
+                )
+                resultado = crew.kickoff()
+                resultado_serializable = limpiar_dict_para_json(serializar_resultado_crew(resultado))
+
+                # Extraer output del agente de BD (última tarea)
+                output = None
+                if resultado_serializable.get('tareas') and len(resultado_serializable['tareas']) > 0:
+                    output = resultado_serializable['tareas'][-1].get('output_completo')
+                elif resultado_serializable.get('respuesta_completa'):
+                    output = resultado_serializable['respuesta_completa']
+                else:
+                    output = ''
+
+                # ACTUALIZA el contexto combinando el anterior y el nuevo
+                nuevo_contexto = extraer_contexto_triaje(output)
+                next_contexto = merge_contextos(contexto, nuevo_contexto)
+                return JsonResponse({
+                    'success': True,
+                    'stage': next_stage,
+                    'contexto': next_contexto,
+                    'resultado': resultado_serializable
+                })
+            else:
+                return JsonResponse({
+                    'success': True,
+                    'stage': 'finalizado',
+                    'message': 'No se agenda cita. Si necesitas otra recomendación, vuelve a describir tus síntomas.'
+                })
+        elif stage == 'confirmar_cita':
+            # Validar que el contexto tenga doctor_id, doctor_nombre, fecha, hora
+            required_fields = ['doctor_id', 'doctor_nombre', 'fecha', 'hora']
+            missing = [f for f in required_fields if not contexto.get(f)]
+            if missing:
+                return JsonResponse({
+                    'success': False,
+                    'message': f'Faltan datos en el contexto para confirmar la cita: {", ".join(missing)}. Por favor, vuelve a la etapa anterior.'
+                }, status=400)
+            if respuesta_usuario and respuesta_usuario.lower() in ['si', 'sí', 'ok', 'acepto', 'confirmo']:
+                tareas = crear_tareas(agente_triaje, agente_bd, datos_paciente, 'confirmar_cita', contexto)
+                next_stage = 'finalizado'
+            elif respuesta_usuario and (fecha_deseada or hora_deseada):
+                # Usuario pide otra fecha
+                next_contexto['fecha_deseada'] = fecha_deseada
+                next_contexto['hora_deseada'] = hora_deseada
+                tareas = crear_tareas(agente_triaje, agente_bd, datos_paciente, 'negociar_fecha', next_contexto)
+                next_stage = 'confirmar_cita'
+            else:
+                return JsonResponse({
+                    'success': True,
+                    'stage': 'finalizado',
+                    'message': 'No se agenda cita. Si necesitas otra recomendación, vuelve a describir tus síntomas.'
+                })
+        elif stage == 'negociar_fecha':
+            # Se espera que contexto tenga doctor_id, doctor_nombre, fecha_deseada, hora_deseada
+            tareas = crear_tareas(agente_triaje, agente_bd, datos_paciente, 'negociar_fecha', contexto)
+            next_stage = 'confirmar_cita'
+        else:
+            return JsonResponse({
+                'success': False,
+                'message': f'Etapa desconocida: {stage}'
+            }, status=400)
+
         crew = Crew(
             agents=[agente_triaje, agente_bd],
-            tasks=[tarea_triaje, tarea_gestion],
+            tasks=tareas,
             process=Process.sequential,
             verbose=False
         )
-        
         resultado = crew.kickoff()
-        
-        # DEPURACIÓN TEMPORAL - puedes quitar esto después
-        print(f"Tipo de resultado: {type(resultado)}")
-        print(f"Raw attribute: {hasattr(resultado, 'raw')}")
-        print(f"Tasks output: {hasattr(resultado, 'tasks_output')}")
-        if hasattr(resultado, 'raw'):
-            print(f"Raw content: {resultado.raw}")
-        if hasattr(resultado, 'tasks_output'):
-            print(f"Tasks output length: {len(resultado.tasks_output) if resultado.tasks_output else 0}")
-        
-        resultado_serializable = serializar_resultado_crew(resultado)
-        
-        # Verificar que el resultado sea serializable antes de enviarlo
-        try:
-            json.dumps(resultado_serializable)
-        except (TypeError, ValueError) as e:
-            print(f"Error de serialización JSON: {e}")
-            # Fallback: usar solo strings
-            resultado_serializable = {
-                'respuesta_completa': str(resultado.raw) if hasattr(resultado, 'raw') else str(resultado),
-                'timestamp': str(datetime.now()),
-                'error_serializacion': f"Fallback aplicado: {str(e)}"
-            }
-        
+        resultado_serializable = limpiar_dict_para_json(serializar_resultado_crew(resultado))
         return JsonResponse({
             'success': True,
+            'stage': next_stage,
+            'contexto': next_contexto,
             'resultado': resultado_serializable
         })
-        
     except json.JSONDecodeError:
         return JsonResponse({
             'success': False,

@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useContext } from "react"
+import { AuthContext } from '@/contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -10,6 +11,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Send, Bot, User, ArrowLeft, Clock, AlertCircle } from "lucide-react"
 
 export default function TriajeChat({ onBack }) {
+  const { nombres, edad, numeroTelefono, paciente, pacienteId } = useContext(AuthContext);
   const [messages, setMessages] = useState([
     {
       id: "1",
@@ -22,6 +24,10 @@ export default function TriajeChat({ onBack }) {
   ])
   const [inputMessage, setInputMessage] = useState("")
   const [isTyping, setIsTyping] = useState(false)
+  const [stage, setStage] = useState('triaje')
+  const [contexto, setContexto] = useState({})
+  const [sintomas, setSintomas] = useState("")
+  const [inputDisabled, setInputDisabled] = useState(false)
   const scrollAreaRef = useRef(null)
   const inputRef = useRef(null)
 
@@ -76,7 +82,7 @@ export default function TriajeChat({ onBack }) {
 //   }
 
   const handleSendMessage = async () => {
-    if (!inputMessage.trim()) return
+    if (!inputMessage.trim() || inputDisabled) return
 
     // Add user message
     const userMessage = {
@@ -88,31 +94,70 @@ export default function TriajeChat({ onBack }) {
     }
 
     setMessages((prev) => [...prev, userMessage])
-    setInputMessage("")
     setIsTyping(true)
+    setInputMessage("")
+
+    // Construir el contexto con el id del paciente
+    const contextoConId = {
+      ...contexto,
+      paciente_id: paciente?.id || pacienteId,
+    }
+
+    // Construir el payload según la etapa
+    let payload = {
+      stage,
+      nombre: nombres,
+      edad: edad,
+      telefono: numeroTelefono,
+      sintomas: stage === 'triaje' ? inputMessage : sintomas,
+      respuesta_usuario: stage !== 'triaje' ? inputMessage : undefined,
+      contexto: contextoConId,
+    }
+    console.log("payload", payload)
+    // Si el usuario pide otra fecha, puedes pedirla con un input especial y añadir aquí:
+    // payload.fecha_deseada = ...
+    // payload.hora_deseada = ...
+    // Limpiar campos undefined
+    Object.keys(payload).forEach(key => payload[key] === undefined && delete payload[key])
 
     try {
       const response = await fetch("http://localhost:8000/asistente/atender/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          nombre: "Carlos",
-          edad: "50",
-          telefono: "950505050",
-          sintomas: userMessage.content,
-        }),
+        body: JSON.stringify(payload),
       })
       const data = await response.json()
+      // Extraer el mensaje del agente
+      let agentMessage = "No se recibió respuesta del backend."
+      if (data.resultado) {
+        console.log(data.resultado)
+        // Buscar respuesta conversacional en el resultado
+        if (data.resultado.tareas && data.resultado.tareas.length > 0) {
+          // Usar el output completo de la última tarea
+          agentMessage = data.resultado.tareas[data.resultado.tareas.length - 1].output_completo
+        } else if (data.resultado.respuesta_completa) {
+          agentMessage = data.resultado.respuesta_completa
+        }
+      } else if (data.message) {
+        agentMessage = data.message
+      }
       setMessages((prev) => [
         ...prev,
         {
           id: Date.now().toString(),
-          content: data.resultado?.respuesta_completa || "No se recibió respuesta del backend.",
+          content: agentMessage,
           sender: "agent",
           timestamp: new Date(),
           type: "text",
         },
       ])
+      // Actualizar stage y contexto
+      if (data.stage) setStage(data.stage)
+      if (data.contexto) setContexto(data.contexto)
+      // Guardar los síntomas originales para las siguientes etapas
+      if (stage === 'triaje') setSintomas(inputMessage)
+      // Si la conversación terminó, deshabilitar input
+      if (data.stage === 'finalizado') setInputDisabled(true)
     } catch (error) {
       setMessages((prev) => [
         ...prev,
@@ -274,11 +319,11 @@ export default function TriajeChat({ onBack }) {
               onKeyPress={handleKeyPress}
               placeholder="Describe tus síntomas..."
               className="flex-1"
-              disabled={isTyping}
+              disabled={isTyping || inputDisabled}
             />
             <Button
               onClick={handleSendMessage}
-              disabled={!inputMessage.trim() || isTyping}
+              disabled={!inputMessage.trim() || isTyping || inputDisabled}
               className="bg-purple-600 hover:bg-purple-700"
             >
               <Send className="h-4 w-4" />

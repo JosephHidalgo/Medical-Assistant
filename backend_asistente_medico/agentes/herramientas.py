@@ -25,6 +25,13 @@ class CrearCitaInput(BaseModel):
     fecha: str = Field(description="Fecha de la cita (YYYY-MM-DD)")
     hora: str = Field(description="Hora de la cita")
     motivo: str = Field(description="Motivo de la consulta")
+    urgencia: Optional[str] = Field(default=None, description="Nivel de urgencia (ALTA, MEDIA, BAJA)")
+    estado: Optional[str] = Field(default=None, description="Estado de la cita (ej: pendiente, confirmada, cancelada)")
+
+class ConsultarDisponibilidadInput(BaseModel):
+    doctor_id: int = Field(description="ID del doctor a consultar")
+    fecha: str = Field(description="Fecha deseada (YYYY-MM-DD)")
+    hora: str = Field(description="Hora deseada (HH:MM)")
 
 # Herramientas personalizadas usando CrewAI BaseTool
 class ConsultarDoctoresTool(BaseTool):
@@ -90,46 +97,63 @@ class RegistrarPacienteTool(BaseTool):
         except Exception as e:
             return f"❌ Error al registrar paciente: {str(e)}"
 
+class ConsultarDisponibilidadTool(BaseTool):
+    name: str = "consultar_disponibilidad"
+    description: str = "Consulta si un doctor está disponible en una fecha y hora específicas. Devuelve True si está disponible, False si ya tiene una cita programada."
+    args_schema: Type[BaseModel] = ConsultarDisponibilidadInput
+
+    def _run(self, doctor_id: int, fecha: str, hora: str) -> str:
+        conn = sqlite3.connect(db.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM citas WHERE doctor_id = ? AND fecha = ? AND hora = ?",
+            (doctor_id, fecha, hora)
+        )
+        count = cursor.fetchone()[0]
+        conn.close()
+        if count == 0:
+            return "Disponible"
+        else:
+            return "No disponible"
+
 class CrearCitaTool(BaseTool):
     name: str = "crear_cita"
-    description: str = "Crea una nueva cita médica entre un paciente registrado y un doctor disponible."
+    description: str = "Crea una nueva cita médica entre un paciente registrado y un doctor disponible. Verifica disponibilidad antes de crear la cita."
     args_schema: Type[BaseModel] = CrearCitaInput
 
     def _run(self, id_cita: str, paciente_id: str, doctor_id: int, 
-             fecha: str, hora: str, motivo: str) -> str:
+             fecha: str, hora: str, motivo: str, urgencia: str = None, estado: str = None) -> str:
         try:
             conn = sqlite3.connect(db.db_path)
             cursor = conn.cursor()
-            
             # Verificar que el paciente existe
-            cursor.execute("SELECT nombre FROM pacientes WHERE id = ?", (paciente_id,))
+            cursor.execute("SELECT nombres FROM pacientes WHERE id = ?", (paciente_id,))
             paciente = cursor.fetchone()
             if not paciente:
                 return f"❌ Error: No existe paciente con ID {paciente_id}"
-            
             # Verificar que el doctor existe y está disponible
             cursor.execute("SELECT nombre, especialidad FROM doctores WHERE id = ? AND disponible = 1", (doctor_id,))
             doctor = cursor.fetchone()
             if not doctor:
                 return f"❌ Error: Doctor con ID {doctor_id} no existe o no está disponible"
-            
-            # Crear la cita
+            # Verificar disponibilidad en fecha/hora
             cursor.execute(
-                """INSERT INTO citas (id, paciente_id, doctor_id, fecha, hora, motivo)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (id_cita, paciente_id, doctor_id, fecha, hora, motivo)
+                "SELECT COUNT(*) FROM citas WHERE doctor_id = ? AND fecha = ? AND hora = ?",
+                (doctor_id, fecha, hora)
             )
-            
+            count = cursor.fetchone()[0]
+            if count > 0:
+                conn.close()
+                return f"❌ Error: El doctor ya tiene una cita programada el {fecha} a las {hora}"
+            # Crear la cita (incluye urgencia y estado si existen en la tabla)
+            cursor.execute(
+                """INSERT INTO citas (id, paciente_id, doctor_id, fecha, hora, motivo, urgencia, estado)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (id_cita, paciente_id, doctor_id, fecha, hora, motivo, urgencia, estado)
+            )
             conn.commit()
             conn.close()
-            
-            return f"""✅ Cita creada exitosamente:
-- ID Cita: {id_cita}
-- Paciente: {paciente[0]}
-- Doctor: {doctor[0]} ({doctor[1]})
-- Fecha: {fecha} a las {hora}
-- Motivo: {motivo}"""
-        
+            return f"✅ Cita creada exitosamente:\n- ID Cita: {id_cita}\n- Paciente: {paciente[0]}\n- Doctor: {doctor[0]} ({doctor[1]})\n- Fecha: {fecha} a las {hora}\n- Motivo: {motivo}\n- Urgencia: {urgencia or '-'}\n- Estado: {estado or '-'}"
         except sqlite3.IntegrityError:
             return f"❌ Error: Ya existe una cita with ID {id_cita}"
         except Exception as e:

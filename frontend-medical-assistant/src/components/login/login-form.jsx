@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import Link from 'next/link';
 
 export function LoginForm({ className, ...props }) {
 
@@ -81,10 +82,13 @@ export function LoginForm({ className, ...props }) {
               </Button>
 
               <div className="text-center text-sm">
-                Don't have an account?{" "}
-                <a href="#" className="underline underline-offset-4">
+                ¿No tienes una cuenta?{" "}
+                {/* <a href="/register" className="underline underline-offset-4">
                   Sign up
-                </a>
+                </a> */}
+                <Link href="/register" className="underline underline-offset-4">
+                  Regístrate
+                </Link>
               </div>
             </div>
           </form>

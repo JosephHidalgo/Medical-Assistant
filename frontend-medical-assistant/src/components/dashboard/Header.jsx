@@ -8,8 +8,10 @@ import { useContext } from 'react';
 
 export default function Header({ isMobile, setSidebarOpen, activeSection }) {
 
-  const { user } = useContext(AuthContext);
-  
+  const { paciente, loading } = useContext(AuthContext);
+  // console.log("Paciente en el header:", paciente);
+  if (loading) return null; // o un loader
+
   return (
     <header className="bg-white border-b border-gray-200 flex items-center justify-between px-4 py-4 md:px-6">
       <div className="flex items-center">
@@ -54,7 +56,9 @@ export default function Header({ isMobile, setSidebarOpen, activeSection }) {
             <DropdownMenuItem>Hotel Sheraton</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu> */}
-        <h1>Hola {user.username}</h1>
+        <h1>
+          Hola {paciente?.nombres} Edad: {paciente?.edad} Teléfono: {paciente?.numero_telefono} ID: {paciente?.id}
+        </h1>
         {/* Notifications */}
         <Button variant="ghost" size="icon" className="relative">
           <Bell className="h-5 w-5" />
